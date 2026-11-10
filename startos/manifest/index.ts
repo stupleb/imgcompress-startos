@@ -13,7 +13,7 @@ export const manifest = setupManifest({
   volumes: ['startos', 'tmp'],
   images: {
     imgcompress: {
-      source: { dockerTag: 'ghcr.io/karimz1/imgcompress:0.9.0' },
+      source: { dockerTag: 'ghcr.io/karimz1/imgcompress:1.0.0' },
       arch: ['x86_64', 'aarch64'],
     },
   },

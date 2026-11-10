@@ -27,15 +27,13 @@ docker buildx imagetools inspect ghcr.io/karimz1/imgcompress:X.Y.Z | grep Platfo
    `ghcr.io/karimz1/imgcompress:X.Y.Z`.
 2. In `startos/versions/current.ts`, set `version` to `X.Y.Z:0` and rewrite the release
    notes, linking the upstream release.
-3. Check the three things `startos/main.ts` relies on inside the image, all visible in
-   upstream's `Dockerfile`, `entrypoint.py` and `backend/image_converter/config/app.json`
-   at the new tag:
+3. Check what `startos/main.ts` relies on inside the image, all visible in upstream's
+   `Dockerfile`, `entrypoint.py` and `backend/image_converter/config/` at the new tag:
    - the process still runs as uid 65532 (`appUid` in `startos/utils.ts`, which owns the
      `tmp` volume);
-   - `temporary_storage.directory` and `logging.backend_log_file` are still under `/tmp`;
-   - `…/presentation/web/static_site/release-notes.md` still exists, and
-     `frontend/src/hooks/useVersionCheck.ts` still reads it before asking GitHub. If
-     upstream has added a setting that turns the update check off, use that instead and
-     delete `assets/release-notes.md` and its mount.
+   - `temporary_storage.directory` and `logging.backend_log_file` in `app.json` are still
+     under `/tmp`;
+   - `loader.py` still reads `DISABLE_UPDATE_CHECK`, `MAX_UPLOAD_SIZE_MB` and
+     `WEB_WORKERS` with the same meaning; `main.ts` sets all three.
 4. Read the release notes for new environment variables. Upstream's settings are
-   environment variables read at start; the package sets none today.
+   environment variables read at start.

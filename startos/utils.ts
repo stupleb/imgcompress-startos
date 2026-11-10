@@ -4,5 +4,4 @@ export const appUid = 65532
 export const uiHostId = 'ui-multi'
 export const uiUsername = 'admin'
 
-export const staticSite =
-  '/container/backend/image_converter/presentation/web/static_site'
+export const defaultMaxUploadMb = 1024

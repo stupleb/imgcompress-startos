@@ -1,10 +1,16 @@
 import { chown } from 'node:fs/promises'
+import { storeJson } from './fileModels/store.json'
 import { i18n } from './i18n'
 import { sdk } from './sdk'
-import { appUid, staticSite, uiPort } from './utils'
+import { appUid, defaultMaxUploadMb, uiPort } from './utils'
 
 export const main = sdk.setupMain(async ({ effects }) => {
   console.info(i18n('Starting ImgCompress!'))
+
+  const maxUploadMb =
+    (await storeJson.read((s) => s.maxUploadMb).const(effects)) ??
+    defaultMaxUploadMb
+  const workers = await storeJson.read((s) => s.workers).const(effects)
 
   await chown(sdk.volumes.tmp.path, appUid, appUid)
 
@@ -12,22 +18,23 @@ export const main = sdk.setupMain(async ({ effects }) => {
     subcontainer: sdk.SubContainer.of(
       effects,
       { imageId: 'imgcompress' },
-      sdk.Mounts.of()
-        .mountVolume({
-          volumeId: 'tmp',
-          subpath: null,
-          mountpoint: '/tmp',
-          readonly: false,
-        })
-        // The web UI asks GitHub for a newer release only when this file names a version.
-        .mountAssets({
-          subpath: 'release-notes.md',
-          mountpoint: `${staticSite}/release-notes.md`,
-          type: 'file',
-        }),
+      sdk.Mounts.of().mountVolume({
+        volumeId: 'tmp',
+        subpath: null,
+        mountpoint: '/tmp',
+        readonly: false,
+      }),
       'imgcompress-sub',
     ),
-    exec: { command: sdk.useEntrypoint(), runAsInit: true },
+    exec: {
+      command: sdk.useEntrypoint(),
+      runAsInit: true,
+      env: {
+        DISABLE_UPDATE_CHECK: 'true',
+        MAX_UPLOAD_SIZE_MB: String(maxUploadMb),
+        WEB_WORKERS: workers ? String(workers) : 'auto',
+      },
+    },
     ready: {
       display: i18n('Web Interface'),
       fn: () =>
