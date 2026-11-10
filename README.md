@@ -9,11 +9,11 @@
 > documentation is accurate and fully applicable — see the Documentation section of
 > `instructions.md` for links.
 
-[ImgCompress](https://github.com/karimz1/imgcompress) compresses, converts and resizes
-images in bulk and removes backgrounds with an AI model that runs on the CPU. This
-package runs upstream's image unmodified. It adds an optional login enforced by
-StartOS, keeps uploads on the data drive, and stops the web UI from checking GitHub for
-new releases.
+[ImgCompress](https://github.com/karimz1/imgcompress) compresses, converts, resizes and
+edits images in bulk, and removes backgrounds and upscales images with AI models that
+run on the CPU. This package runs upstream's image unmodified. It adds an optional login
+enforced by StartOS, keeps uploads on the data drive, turns off the web UI's check for
+new releases, and lets the user set the upload size limit and the number of web workers.
 
 ---
 
@@ -38,61 +38,70 @@ new releases.
 
 The package runs upstream's own image and entrypoint in one subcontainer.
 
-| Property      | Value                                                                       |
-| ------------- | --------------------------------------------------------------------------- |
-| Image         | `ghcr.io/karimz1/imgcompress`, upstream, unmodified                         |
-| Architectures | x86_64, aarch64                                                             |
-| Entrypoint    | upstream: `dumb-init`, then `entrypoint.py`, run as the container's PID 1   |
-| User          | the image's `nonroot` user, uid 65532                                       |
-| Subcontainer  | `imgcompress-sub`, running the daemon `primary`                             |
+| Property      | Value                                                                     |
+| ------------- | ------------------------------------------------------------------------- |
+| Image         | `ghcr.io/karimz1/imgcompress`, upstream, unmodified                       |
+| Architectures | x86_64, aarch64                                                           |
+| Entrypoint    | upstream: `dumb-init`, then `entrypoint.py`, run as the container's PID 1 |
+| User          | the image's `nonroot` user, uid 65532                                     |
+| Subcontainer  | `imgcompress-sub`, running the daemon `primary`                           |
 
 `entrypoint.py` writes the web UI's runtime settings and starts the Python backend,
-which runs the Granian web server with one worker process per CPU core of the server.
-The worker count is set only in upstream's built-in `app.json`, which the package
-leaves alone.
+which runs the Granian web server with the number of worker processes Configure Limits
+sets, one per CPU core by default. Conversions run as background jobs inside it.
 
 The image has no shell. `start-cli package attach imgcompress -n imgcompress-sub --
 python -c "…"` works; `sh` does not exist.
 
 Two warnings at every start come from upstream and are harmless: `tzlocal`'s "Can not
 find any timezone configuration, defaulting to UTC" (the image has no timezone set),
-and Granian's
-"Configuration allows spawning up to 128 Python threads".
+and Granian's "Configuration allows spawning up to 128 Python threads".
 
 ## Volume and Data Layout
 
 Nothing ImgCompress keeps is meant to last: there is no database and no account. The
 package has two volumes.
 
-| Volume    | Mount point | Contents                                                                          |
-| --------- | ----------- | --------------------------------------------------------------------------------- |
-| `startos` | not mounted | `store.json`: the access setting                                                  |
-| `tmp`     | `/tmp`      | uploads and results (`source_*/`, `converted_*/`, `converted_*.zip`), and the backend log `imgcompress-backend.log` |
+| Volume    | Mount point | Contents                                                                                                                  |
+| --------- | ----------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `startos` | not mounted | `store.json`: the access setting and the limits                                                                           |
+| `tmp`     | `/tmp`      | jobs (`job_*/status.json`), uploads and results (`source_*/`, `converted_*/`, ZIPs), and the backend log `imgcompress-backend.log` |
 
-ImgCompress stages every upload and result under `/tmp`, and a single upload may be up
-to 40 GiB. Mounting `tmp` there puts those files on the data drive rather than in the
-container's own writable layer. A cleanup inside ImgCompress runs every hour and deletes
-job folders and ZIPs more than an hour old, so a result lives one to two hours; the
-first cleanup after a start runs an hour later. The backend log rotates at 25 MiB and
-keeps one old copy.
+ImgCompress stages every upload, result and job under `/tmp`. Mounting `tmp` there puts
+those files on the data drive rather than in the container's own writable layer, and
+lets finished jobs survive a restart. A cleanup inside ImgCompress runs every
+hour and deletes job folders, results and ZIPs 48 hours after their last activity; the
+folders of a job still running are never deleted. The backend log rotates at 25 MiB and
+keeps one old copy. Each start also leaves a `pymp-*` folder from Python's
+multiprocessing, which the cleanup doesn't remove.
 
 ImgCompress runs as uid 65532 and the volume is created owned by root, so the package
 sets the owner of the volume's root to 65532 on every start, before the daemon runs.
 
-The package also mounts an empty file from its assets over the web UI's
-`static_site/release-notes.md`, read-only (see Network Access and Interfaces).
-
 ## File Models
 
-One JSON file, written only by the package.
+One JSON file, written only by the package's actions.
 
-**`store.json`** (`startos` volume) holds `uiPassword`. Only Manage Access writes it.
-When it is set, StartOS's proxy asks for a login; when it is absent, the Web UI is
-public. The interface re-reads it on every change, so a hand edit takes effect at once
-as well.
+**`store.json`** (`startos` volume):
 
-The package passes no environment variables and does not touch upstream's `app.json`:
-ImgCompress runs with its defaults, Storage Management panel included.
+| Key           | Written by       | Effect                                                                         |
+| ------------- | ---------------- | ------------------------------------------------------------------------------ |
+| `uiPassword`  | Manage Access    | Present: StartOS's proxy asks for a login. Absent: the Web UI is public        |
+| `maxUploadMb` | Configure Limits | Largest single upload, in MB; 1024 when absent                                 |
+| `workers`     | Configure Limits | Granian worker processes; `null` or absent means one per CPU core              |
+
+The interface re-reads `uiPassword` on every change, so a login change, hand edits
+included, applies without a restart. `maxUploadMb` and `workers` reach ImgCompress as
+environment variables read at start, so a change restarts the daemon:
+
+| Variable               | Value                                         |
+| ---------------------- | --------------------------------------------- |
+| `DISABLE_UPDATE_CHECK` | always `true`                                 |
+| `MAX_UPLOAD_SIZE_MB`   | `maxUploadMb`                                 |
+| `WEB_WORKERS`          | `workers`, or `auto` when unset               |
+
+The package does not touch upstream's `app.json`; everything else runs with upstream's
+defaults, the Storage Management panel included.
 
 ## Dependencies
 
@@ -110,15 +119,16 @@ With a password set, StartOS's proxy requires HTTP Basic authentication, usernam
 `admin`, realm `ImgCompress`, on every address of the interface before a request
 reaches ImgCompress. ImgCompress itself has no login and no idea the gate exists.
 
-Upstream's web UI reads its own version from `release-notes.md` and, when it finds
-one, asks `api.github.com` from the visitor's browser for the latest release, to show an
-"update available" banner with Docker update steps. The empty file the package mounts
-there leaves it no version, so the browser never contacts GitHub.
+`DISABLE_UPDATE_CHECK=true` stops the web UI from asking `api.github.com`, from the
+visitor's browser, whether a newer release exists, and so from showing upstream's
+Docker update steps. Its "What's new" panel still shows upstream's notes for the
+installed version.
 
 The server makes one outbound connection of its own, and only on request: the internet
 check button in the web UI's system status panel (`/api/health/internet`) opens a TCP
 connection to `1.1.1.1` port 53 and sends nothing over it. It can report no internet
-on a working server; nothing ImgCompress does depends on it.
+on a working server; nothing ImgCompress does depends on it. Upstream's "Notify me when
+done" (`NOTIFY_URL`) is off, as upstream ships it.
 
 ## Installation and First-Run Flow
 
@@ -127,7 +137,7 @@ service starts, as upstream's is; Manage Access adds a login.
 
 ## Actions
 
-One action, available whether the service is running or stopped.
+Two actions, both available whether the service is running or stopped.
 
 **Manage Access** (`manage-access`) — run it before giving ImgCompress an address other
 people can reach, or to change who can use it. **Public** removes `uiPassword` from
@@ -136,6 +146,12 @@ generated one by default. The form pre-fills the current choice and password, so
 it again and saving changes nothing. The proxy picks up the change within seconds,
 without restarting ImgCompress. Browsers that saved the old password ask again. The
 result shows the username and the password.
+
+**Configure Limits** (`configure-limits`) — run it when an upload is refused as too large
+(ImgCompress answers 413 and names the limit), or to lower memory use when several
+people convert at once. It writes `maxUploadMb` and `workers` to `store.json`; a running
+ImgCompress restarts, which takes a few seconds and stops any conversion in progress. The form pre-fills the current values, so saving them unchanged is
+harmless. It returns no result.
 
 ## Tasks
 
@@ -153,23 +169,23 @@ that lasts means the backend did not start: look in the log for upstream's
 ## Backups and Restore
 
 The `startos` volume is copied whole (`ofVolumes('startos')`); it holds only the access
-setting. The `tmp` volume is left out: uploads and results are temporary and gone within
-two hours anyway. A restored instance starts with the same access setting and no files.
+setting and the limits. The `tmp` volume is left out: jobs, uploads and results are
+temporary and deleted within 49 hours anyway. A restored instance starts with the same
+access setting and limits and no files.
 
 ## Limitations and Differences
 
-1. **No WebP output.** This upstream release reads WebP but writes only JPEG, PNG, AVIF,
-   ICO and PDF; upstream's docs site already describes WebP output from a later release.
-2. **No login of its own.** Without Manage Access, anyone who can reach an address can
+1. **No login of its own.** Without Manage Access, anyone who can reach an address can
    process images, the Storage Management panel lets them download or clear every
-   converted file still on the server, and `/api/logs/backend` serves them the backend
-   log.
-3. **No update banner and no "What's new".** Both come from the release-notes file the
-   package empties. StartOS shows the package's release notes on update instead.
-4. **Background removal is heavy.** The model runs on the CPU. On four cores, one
-   1600-pixel photo took about 40 seconds and memory peaked at 1.3 GiB. Each worker that
-   has removed a background keeps the model loaded, about 600 MiB, until the service
+   converted file still on the server, other people's background jobs included, and
+   `/api/logs/backend` serves them the backend log.
+2. **Uploads capped at 1 GB by default**, where upstream allows 40 GB. Configure Limits
+   raises it.
+3. **The AI features are heavy.** Both models run on the CPU. On four cores, removing the
+   background of one 1600-pixel photo took about 45 seconds and lowered free memory by
+   about 1.4 GB. Each worker that has used a model keeps it loaded until the service
    restarts.
+4. **No "Notify me when done".** The package doesn't set upstream's `NOTIFY_URL`.
 
 ---
 
@@ -185,12 +201,16 @@ volumes:
   tmp: /tmp
 file_models:
   - startos/store.json
-startos_managed_env_vars: []
+startos_managed_env_vars:
+  - DISABLE_UPDATE_CHECK
+  - MAX_UPLOAD_SIZE_MB
+  - WEB_WORKERS
 dependencies: none
 interfaces:
   ui: { type: ui, port: 5000 }
 actions:
   - manage-access
+  - configure-limits
 tasks: []
 health_checks:
   - primary

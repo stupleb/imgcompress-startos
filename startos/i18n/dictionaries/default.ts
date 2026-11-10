@@ -25,6 +25,15 @@ const dict = {
   'Login required': 16,
   'ImgCompress now asks for a username and password. Enter these when your browser prompts for them.': 17,
   Username: 18,
+
+  // actions/configureLimits.ts
+  'Upload size limit': 19,
+  'The largest single upload ImgCompress accepts, in megabytes. 1024 is 1 GB. Very large PSD or PDF files may need more; upstream allows up to 40960 (40 GB).': 20,
+  'Web workers': 21,
+  'How many requests ImgCompress handles at once. Leave empty for one per CPU core. Each worker that has run background removal or AI upscaling keeps that model in memory, so fewer workers use less memory when several people convert at once.': 22,
+  'One per CPU core': 23,
+  'Configure Limits': 24,
+  'Set the largest upload ImgCompress accepts and how many web workers it runs. A running ImgCompress restarts to apply a change.': 25,
 } as const
 
 /**
